@@ -341,7 +341,7 @@ impl MetricsExporter {
     /// Create a new OTLP gRPC metrics exporter.
     #[cfg(feature = "grpc-tonic")]
     pub fn new(
-        export_builder: TonicExporterBuilder,
+        mut export_builder: TonicExporterBuilder,
         temporality_selector: Box<dyn TemporalitySelector>,
         aggregation_selector: Box<dyn AggregationSelector>,
     ) -> Result<MetricsExporter> {
@@ -365,18 +365,22 @@ impl MetricsExporter {
 
         let endpoint = Channel::from_shared(endpoint).map_err::<crate::Error, _>(Into::into)?;
 
-        #[cfg(feature = "tls")]
-        let channel = match tonic_config.tls_config {
-            Some(tls_config) => endpoint
-                .tls_config(tls_config)
-                .map_err::<crate::Error, _>(Into::into)?,
-            None => endpoint,
-        }
-        .timeout(_timeout)
-        .connect_lazy();
+        let channel = match export_builder.channel.take() {
+            Some(channel) => channel,
 
-        #[cfg(not(feature = "tls"))]
-        let channel = endpoint.timeout(config.timeout).connect_lazy();
+            #[cfg(feature = "tls")]
+            None => match tonic_config.tls_config {
+                Some(tls_config) => endpoint
+                    .tls_config(tls_config)
+                    .map_err::<crate::Error, _>(Into::into)?,
+                None => endpoint,
+            }
+            .timeout(_timeout)
+            .connect_lazy(),
+
+            #[cfg(not(feature = "tls"))]
+            None => endpoint.timeout(config.timeout).connect_lazy(),
+        };
 
         let (sender, receiver) = tokio::sync::mpsc::channel::<ExportMsg>(2);
         tokio::spawn(async move {
